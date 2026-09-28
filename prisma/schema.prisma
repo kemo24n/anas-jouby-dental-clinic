@@ -1,0 +1,660 @@
+// ============================================================
+//  عيادة الدكتورة أنس جوبي لطب الأسنان — مخطط قاعدة البيانات
+//  Dr. Anas Jouby Dental Clinic — database schema
+// ============================================================
+
+generator client {
+  provider      = "prisma-client-js"
+  // native = جهازك/الخادم، rhel = الدوال السحابية على Netlify و Vercel
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------- Enums -------------------------
+
+enum Role {
+  ADMIN
+  DENTIST
+  RECEPTIONIST
+  PATIENT
+}
+
+enum Gender {
+  FEMALE
+  MALE
+  UNSPECIFIED
+}
+
+enum AppointmentStatus {
+  BOOKED // محجوز
+  CONFIRMED // مؤكد
+  ARRIVED // حضر
+  COMPLETED // مكتمل
+  CANCELLED // ملغى
+  NO_SHOW // لم يحضر
+  RESCHEDULED // معاد جدولته
+}
+
+enum CaseStatus {
+  OPEN // مفتوحة
+  IN_TREATMENT // قيد العلاج
+  COMPLETED // مكتملة
+  ON_HOLD // متوقفة
+}
+
+enum TreatmentPlanStatus {
+  PROPOSED // مقترح
+  APPROVED // موافق عليه
+  IN_PROGRESS // قيد التنفيذ
+  COMPLETED // مكتمل
+  REJECTED // مرفوض
+}
+
+enum TreatmentItemStatus {
+  PROPOSED
+  APPROVED
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+}
+
+enum ToothCondition {
+  HEALTHY // سليم
+  CARIES // تسوس
+  FILLING // حشوة
+  CROWN // تاج
+  MISSING // مفقود
+  EXTRACTED // مخلوع
+  ROOT_CANAL // علاج عصب
+  IMPLANT // زراعة
+  FRACTURE // كسر
+  OTHER // أخرى
+}
+
+enum PaymentMethod {
+  CASH // نقداً
+  CARD // بطاقة
+  TRANSFER // تحويل بنكي
+  OTHER // أخرى
+}
+
+enum FileKind {
+  BEFORE // صورة قبل
+  AFTER // صورة بعد
+  XRAY // أشعة
+  CLINICAL // صورة سريرية
+  DOCUMENT // مستند
+}
+
+enum ContactStatus {
+  NEW // جديد
+  IN_PROGRESS // قيد المتابعة
+  ANSWERED // تم الرد
+  CLOSED // مغلق
+}
+
+enum NotificationType {
+  APPOINTMENT_BOOKED
+  APPOINTMENT_CONFIRMED
+  APPOINTMENT_CANCELLED
+  APPOINTMENT_REMINDER
+  TREATMENT_PLAN_UPDATED
+  PAYMENT_RECORDED
+  SYSTEM
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+// ------------------------- Identity -------------------------
+
+model User {
+  id                 String    @id @default(uuid()) @db.Uuid
+  email              String?   @unique // اختياري
+  phone              String    @unique // رقم الدخول بصيغة دولية بدون + (963944655028)
+  passwordHash       String
+  fullName           String
+  role               Role      @default(PATIENT)
+  isActive           Boolean   @default(true)
+  mustChangePassword Boolean   @default(false)
+  tokenVersion       Int       @default(0) // يُزاد عند تغيير كلمة المرور/الإيقاف/الخروج لإبطال الجلسات القديمة
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  patient           Patient?
+  dentist           Dentist?
+  staff             Staff?
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  clinicalNotes     ClinicalNote[]      @relation("ClinicalNoteAuthor")
+  chartRecords      DentalChartRecord[] @relation("ChartRecordAuthor")
+  createdPlans      TreatmentPlan[]     @relation("PlanAuthor")
+  recordedPayments  Payment[]           @relation("PaymentRecorder")
+  uploadedFiles     PatientFile[]       @relation("FileUploader")
+  createdAppointments Appointment[]     @relation("AppointmentCreator")
+
+  @@index([role])
+  @@map("users")
+}
+
+model Staff {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobTitle  String? // المسمى الوظيفي
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("staff")
+}
+
+model Dentist {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @unique @db.Uuid
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName        String // د. أنس جوبي
+  title           String? // طبيبة أسنان — محاضِرة في كلية طب الأسنان
+  bio             String?
+  philosophy      String?
+  education       String[] @default([])
+  certifications  String[] @default([])
+  specializations String[] @default([])
+  languages       String[] @default([])
+  memberships     String[] @default([])
+  awards          String[] @default([])
+  yearsExperience Int      @default(0)
+  photoUrl        String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  appointments  Appointment[]
+  workingHours  WorkingHour[]
+  blockedTimes  BlockedTime[]
+  clinicalNotes ClinicalNote[]
+
+  @@map("dentists")
+}
+
+// ------------------------- Patients -------------------------
+
+model Patient {
+  id           String    @id @default(uuid()) @db.Uuid
+  code         String    @unique // رقم المريض، مثال: P-1001
+  userId       String?   @unique @db.Uuid
+  user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  fullName     String
+  phone        String
+  email        String?
+  birthDate    DateTime?
+  gender       Gender    @default(UNSPECIFIED)
+  address      String?
+  photoUrl     String?
+  notes        String?
+  registeredAt DateTime  @default(now())
+  deletedAt    DateTime? // حذف ناعم — السجلات الطبية لا تُحذف نهائياً
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  medicalHistory  PatientMedicalHistory?
+  dentalHistory   PatientDentalHistory?
+  appointments    Appointment[]
+  cases           DentalCase[]
+  treatmentPlans  TreatmentPlan[]
+  clinicalNotes   ClinicalNote[]
+  chartRecords    DentalChartRecord[]
+  payments        Payment[]
+  files           PatientFile[]
+
+  @@index([phone])
+  @@index([fullName])
+  @@index([deletedAt])
+  @@map("patients")
+}
+
+model PatientMedicalHistory {
+  id                String   @id @default(uuid()) @db.Uuid
+  patientId         String   @unique @db.Uuid
+  patient           Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  allergies         String? // الحساسية
+  chronicDiseases   String? // الأمراض المزمنة
+  medications       String? // الأدوية الحالية
+  surgeries         String? // العمليات السابقة
+  isPregnant        Boolean  @default(false)
+  isSmoker          Boolean  @default(false)
+  hasHypertension   Boolean  @default(false)
+  hasDiabetes       Boolean  @default(false)
+  hasHeartCondition Boolean  @default(false)
+  hasBleedingDisorder Boolean @default(false)
+  notes             String?
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+
+  @@map("patient_medical_history")
+}
+
+model PatientDentalHistory {
+  id                  String   @id @default(uuid()) @db.Uuid
+  patientId           String   @unique @db.Uuid
+  patient             Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  previousTreatments  String?
+  previousSurgeries   String?
+  previousRootCanals  String?
+  previousExtractions String?
+  previousImplants    String?
+  orthodonticHistory  String?
+  gumDisease          Boolean  @default(false)
+  sensitivity         Boolean  @default(false)
+  bruxism             Boolean  @default(false)
+  notes               String?
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
+
+  @@map("patient_dental_history")
+}
+
+// ------------------------- Services -------------------------
+
+model ServiceCategory {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @unique // طب الأسنان التجميلي
+  slug        String    @unique
+  description String?
+  icon        String?
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  services    Service[]
+
+  @@map("service_categories")
+}
+
+model Service {
+  id            String          @id @default(uuid()) @db.Uuid
+  categoryId    String          @db.Uuid
+  category      ServiceCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  name          String
+  slug          String          @unique
+  description   String?
+  durationMin   Int             @default(30)
+  startingPrice Decimal?        @db.Decimal(12, 2)
+  currency      String          @default("USD")
+  imageUrl      String?
+  sortOrder     Int             @default(0)
+  isActive      Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  appointments Appointment[]
+
+  @@index([isActive])
+  @@map("services")
+}
+
+// ------------------------- Scheduling -------------------------
+
+model WorkingHour {
+  id         String  @id @default(uuid()) @db.Uuid
+  dentistId  String  @db.Uuid
+  dentist    Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+  weekday    Int // 0 = الأحد ... 6 = السبت
+  startTime  String // "09:00"
+  endTime    String // "17:00"
+  breakStart String? // "13:00"
+  breakEnd   String? // "13:30"
+  isClosed   Boolean @default(false)
+
+  @@unique([dentistId, weekday])
+  @@map("working_hours")
+}
+
+model Holiday {
+  id        String   @id @default(uuid()) @db.Uuid
+  date      DateTime @db.Date
+  title     String
+  createdAt DateTime @default(now())
+
+  @@unique([date])
+  @@map("holidays")
+}
+
+model BlockedTime {
+  id        String   @id @default(uuid()) @db.Uuid
+  dentistId String   @db.Uuid
+  dentist   Dentist  @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+  startsAt  DateTime
+  endsAt    DateTime
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([dentistId, startsAt])
+  @@map("blocked_times")
+}
+
+model Appointment {
+  id          String            @id @default(uuid()) @db.Uuid
+  code        String            @unique // رقم الموعد، مثال: A-250921-0007
+  patientId   String            @db.Uuid
+  patient     Patient           @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  dentistId   String            @db.Uuid
+  dentist     Dentist           @relation(fields: [dentistId], references: [id], onDelete: Restrict)
+  serviceId   String?           @db.Uuid
+  service     Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  startsAt    DateTime
+  endsAt      DateTime
+  status      AppointmentStatus @default(BOOKED)
+  reason      String? // سبب الزيارة
+  notes       String?
+  createdById String?           @db.Uuid
+  createdBy   User?             @relation("AppointmentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  cancelledAt DateTime?
+  cancelReason String?
+  rescheduledFromId String?     @db.Uuid
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  clinicalNotes ClinicalNote[]
+  payments      Payment[]
+  reminders     AppointmentReminder[]
+
+  // حماية على مستوى قاعدة البيانات ضد الحجز المزدوج لنفس البداية
+  @@unique([dentistId, startsAt], name: "dentist_slot_unique")
+  @@index([startsAt])
+  @@index([patientId, startsAt])
+  @@index([status])
+  @@map("appointments")
+}
+
+model AppointmentReminder {
+  id            String         @id @default(uuid()) @db.Uuid
+  appointmentId String         @db.Uuid
+  appointment   Appointment    @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  sendAt        DateTime
+  channel       String         @default("database") // database | whatsapp | sms | email
+  status        ReminderStatus @default(PENDING)
+  sentAt        DateTime?
+  error         String?
+  createdAt     DateTime       @default(now())
+
+  @@index([status, sendAt])
+  @@map("appointment_reminders")
+}
+
+// ------------------------- Clinical -------------------------
+
+model DentalCase {
+  id             String     @id @default(uuid()) @db.Uuid
+  patientId      String     @db.Uuid
+  patient        Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  title          String
+  diagnosis      String?
+  teeth          Int[]      @default([])
+  description    String?
+  treatment      String?
+  status         CaseStatus @default(OPEN)
+  startDate      DateTime   @default(now())
+  expectedEndDate DateTime?
+  actualEndDate  DateTime?
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  files          PatientFile[]
+  treatmentPlans TreatmentPlan[]
+
+  @@index([patientId, status])
+  @@map("dental_cases")
+}
+
+model TreatmentPlan {
+  id          String              @id @default(uuid()) @db.Uuid
+  patientId   String              @db.Uuid
+  patient     Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  caseId      String?             @db.Uuid
+  dentalCase  DentalCase?         @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  title       String
+  status      TreatmentPlanStatus @default(PROPOSED)
+  notes       String?
+  createdById String?             @db.Uuid
+  createdBy   User?               @relation("PlanAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  items    TreatmentPlanItem[]
+  payments Payment[]
+
+  @@index([patientId, status])
+  @@map("treatment_plans")
+}
+
+model TreatmentPlanItem {
+  id            String              @id @default(uuid()) @db.Uuid
+  planId        String              @db.Uuid
+  plan          TreatmentPlan       @relation(fields: [planId], references: [id], onDelete: Cascade)
+  procedure     String
+  toothNumber   Int?
+  estimatedCost Decimal             @default(0) @db.Decimal(12, 2)
+  actualCost    Decimal?            @db.Decimal(12, 2)
+  status        TreatmentItemStatus @default(PROPOSED)
+  scheduledDate DateTime?
+  notes         String?
+  sortOrder     Int                 @default(0)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([planId])
+  @@map("treatment_plan_items")
+}
+
+model ClinicalNote {
+  id              String       @id @default(uuid()) @db.Uuid
+  patientId       String       @db.Uuid
+  patient         Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  dentistId       String?      @db.Uuid
+  dentist         Dentist?     @relation(fields: [dentistId], references: [id], onDelete: SetNull)
+  appointmentId   String?      @db.Uuid
+  appointment     Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  authorId        String?      @db.Uuid
+  author          User?        @relation("ClinicalNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  content         String
+  diagnosis       String?
+  treatment       String?
+  recommendations String?
+  followUpAt      DateTime?
+  visibleToPatient Boolean     @default(false)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([patientId, createdAt])
+  @@map("clinical_notes")
+}
+
+model Tooth {
+  number   Int     @id // ترقيم FDI
+  quadrant Int
+  nameAr   String
+  isAdult  Boolean @default(true)
+
+  records DentalChartRecord[]
+
+  @@map("teeth")
+}
+
+model DentalChartRecord {
+  id           String         @id @default(uuid()) @db.Uuid
+  patientId    String         @db.Uuid
+  patient      Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  toothNumber  Int
+  tooth        Tooth          @relation(fields: [toothNumber], references: [number], onDelete: Restrict)
+  condition    ToothCondition @default(HEALTHY)
+  notes        String?
+  recordedById String?        @db.Uuid
+  recordedBy   User?          @relation("ChartRecordAuthor", fields: [recordedById], references: [id], onDelete: SetNull)
+  recordedAt   DateTime       @default(now())
+
+  // حالة واحدة حالية لكل سن لكل مريض
+  @@unique([patientId, toothNumber])
+  @@index([patientId])
+  @@map("dental_chart_records")
+}
+
+// ------------------------- Money & files -------------------------
+
+model Payment {
+  id              String         @id @default(uuid()) @db.Uuid
+  patientId       String         @db.Uuid
+  patient         Patient        @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  appointmentId   String?        @db.Uuid
+  appointment     Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  treatmentPlanId String?        @db.Uuid
+  treatmentPlan   TreatmentPlan? @relation(fields: [treatmentPlanId], references: [id], onDelete: SetNull)
+  amount          Decimal        @db.Decimal(12, 2)
+  currency        String         @default("USD")
+  method          PaymentMethod  @default(CASH)
+  paidAt          DateTime       @default(now())
+  notes           String?
+  recordedById    String?        @db.Uuid
+  recordedBy      User?          @relation("PaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+  deletedAt       DateTime?
+  createdAt       DateTime       @default(now())
+
+  @@index([patientId, paidAt])
+  @@map("payments")
+}
+
+model PatientFile {
+  id           String      @id @default(uuid()) @db.Uuid
+  patientId    String      @db.Uuid
+  patient      Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  caseId       String?     @db.Uuid
+  dentalCase   DentalCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  name         String
+  storageKey   String // المفتاح داخل مزوّد التخزين — لا يُعرض مباشرة
+  mimeType     String
+  sizeBytes    Int
+  kind         FileKind    @default(DOCUMENT)
+  toothNumber  Int?
+  takenAt      DateTime?
+  uploadedById String?     @db.Uuid
+  uploadedBy   User?       @relation("FileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  deletedAt    DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([patientId, kind])
+  @@map("patient_files")
+}
+
+// ------------------------- Platform -------------------------
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType @default(SYSTEM)
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String?  @db.Uuid
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action      String // CREATE | UPDATE | DELETE | LOGIN | VIEW_RECORD ...
+  entity      String // Patient | Appointment | TreatmentPlan ...
+  entityId    String?
+  patientId   String?  @db.Uuid
+  description String
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+model ContactRequest {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String
+  phone     String
+  email     String?
+  subject   String?
+  message   String
+  status    ContactStatus @default(NEW)
+  handledAt DateTime?
+  createdAt DateTime      @default(now())
+
+  @@index([status, createdAt])
+  @@map("contact_requests")
+}
+
+model Faq {
+  id        String   @id @default(uuid()) @db.Uuid
+  question  String
+  answer    String
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("faqs")
+}
+
+model Testimonial {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  text      String
+  rating    Int      @default(5)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("testimonials")
+}
+
+model ClinicSettings {
+  id              String   @id @default("singleton")
+  clinicName      String   @default("عيادة الدكتورة أنس جوبي لطب الأسنان")
+  dentistName     String   @default("د. أنس جوبي")
+  tagline         String?
+  logoUrl         String?
+  phone           String   @default("021 212 1859")
+  whatsapp        String   @default("963944655028")
+  email           String   @default("")
+  address         String   @default("حلب، العزيزية، شارع كنيسة اللاتين، فوق محل الملاك الأبيض")
+  latitude        Float    @default(36.2080)
+  longitude       Float    @default(37.1535)
+  mapUrl          String?
+  instagram       String?
+  facebook        String?
+  tiktok          String?
+  youtube         String?
+  primaryColor    String   @default("#B7687F")
+  secondaryColor  String   @default("#EDC9CF")
+  accentColor     String   @default("#C4A27C")
+  fontFamily      String   @default("IBM Plex Sans Arabic")
+  slotMinutes     Int      @default(30)
+  bufferMinutes   Int      @default(10)
+  maxAdvanceDays  Int      @default(60)
+  cancellationPolicy String @default("لتعديل الموعد أو إلغائه يرجى التواصل مع العيادة قبل 24 ساعة على الأقل.")
+  heroTitle       String   @default("35 سنة في طب الأسنان")
+  heroSubtitle    String   @default("الدكتورة أنس جوبي، طبيبة أسنان ومحاضِرة في كلية طب الأسنان.")
+  updatedAt       DateTime @updatedAt
+
+  @@map("clinic_settings")
+}

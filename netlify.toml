@@ -1,0 +1,8 @@
+# النشر المجاني على Netlify — البناء يُنشئ جداول قاعدة البيانات والحساب الأول تلقائياً
+[build]
+  command = "npm run cloud-build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NEXT_TELEMETRY_DISABLED = "1"
