@@ -17,8 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "setup": "prisma db push && tsx prisma/seed.ts",
-    "cloud-build": "prisma generate && prisma db push --skip-generate && tsx prisma/seed.ts && next build",
-    "vercel-build": "npm run cloud-build"
+    "cloud-build": "node node_modules/@prisma/engines/scripts/postinstall.js && prisma generate && prisma db push --skip-generate && tsx prisma/seed.ts && next build",
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
